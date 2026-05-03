@@ -70,6 +70,32 @@ type simple_flag = string [@@deriving show]
 type flag = SimpleFlag of simple_flag | OptionFlag of option_flag
 [@@deriving show]
 
+(* Returns true if flag is set (present), false otherwise *)
+let get_simple_flag (short : string) (long : string) (flags : flag list) : bool
+    =
+  Option.is_some
+    (List.find_opt
+       (fun flag ->
+         match flag with
+         | SimpleFlag f -> f = short || f = long
+         | _ -> false)
+       flags)
+
+(* Returns the option value, or None *)
+let get_option_value (short : string) (long : string) (flags : flag list) :
+    string option =
+  Option.map
+    (fun f ->
+      match f with
+      | OptionFlag (_, v) -> v
+      | _ -> assert false)
+    (List.find_opt
+       (fun flag ->
+         match flag with
+         | OptionFlag (n, v) -> n = short || n = long
+         | _ -> false)
+       flags)
+
 type arguments = { flags : flag list; command : string; file : string option }
 [@@deriving show]
 
@@ -180,8 +206,7 @@ let replace_flag_token (char_arg_flags : char list) = function
               if List.length xs > 0 then
                 let xs_str = xs |> List.to_seq |> String.of_seq in
                 xs_str :: ("-" ^ s_str) :: list
-              else
-                ("-" ^ s_str) :: list
+              else ("-" ^ s_str) :: list
             else parse_chars (("-" ^ s_str) :: list) xs
       in
       let chars =

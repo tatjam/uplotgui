@@ -19,4 +19,4 @@
  (name uplotgui)
  (synopsis "youplot but using GNUPlot for GUI")
  (description "youplot but using GNUPlot for GUI")
- (depends ocaml dune ppx_deriving))
+ (depends ocaml dune ppx_deriving unix))

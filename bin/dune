@@ -3,4 +3,4 @@
  (name main)
  (preprocess
   (pps ppx_deriving.show))
- (libraries uplotgui))
+ (libraries unix))
