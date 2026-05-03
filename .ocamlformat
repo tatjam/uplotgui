@@ -1,2 +1,3 @@
 profile=default
 module-item-spacing=sparse
+break-cases=all
