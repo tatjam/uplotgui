@@ -1,7 +1,6 @@
 (* Copyright (C) 2026 tatjam
    SPDX-License-Identifier: GPL-3.0-or-later *)
 
-
 type range = float * float [@@deriving show]
 
 (* Simple parser-combinator types and helpers *)
@@ -27,6 +26,9 @@ let either (a : 'a parser) (b : 'a parser) : 'a parser =
   match a x with
   | Some ax -> Some ax
   | None -> b x
+
+let any_of (ps : 'a parser list) : 'a parser =
+ fun x -> List.find_map (fun p -> p x) ps
 
 let both (a : 'a parser) (b : 'b parser) : ('a * 'b) parser =
  fun x ->
@@ -59,29 +61,29 @@ let map (f : 'a -> 'b) (a : 'a parser) : 'b parser =
   | Some (ax, xs) -> Some (f ax, xs)
   | None -> None
 
-let single_to_list (a : 'a parser) : 'a list parser =
- fun x ->
-  match a x with
-  | Some (ax, xs) -> Some ([ ax ], xs)
-  | None -> None
-
 (* Argument types *)
 
-type option_flag = string * string
+type option_flag = string * string [@@deriving show]
 
-type simple_flag = string
+type simple_flag = string [@@deriving show]
 
 type flag = SimpleFlag of simple_flag | OptionFlag of option_flag
+[@@deriving show]
 
 type arguments = { flags : flag list; command : string; file : string option }
+[@@deriving show]
 
 (* Token types *)
 
-let flag_token : string parser =
+(* A token of the type -x *)
+let short_flag_token (flags : char list) : string parser =
   checked_token (fun s ->
-      String.starts_with ~prefix:"-" s
-      && not (String.starts_with ~prefix:"--" s))
+      if String.starts_with ~prefix:"-" s && String.length s == 2 then
+        let flag = s.[1] in
+        List.mem flag flags
+      else false)
 
+(* A token of the type --flag *)
 let long_flag_token (flags : string list) : string parser =
   checked_token (fun x ->
       if String.starts_with ~prefix:"--" x then
@@ -89,10 +91,66 @@ let long_flag_token (flags : string list) : string parser =
         List.mem flag flags
       else false)
 
+(* Anything that's not -x or --flag *)
 let not_flag_token : string parser =
   checked_token (fun s -> not (String.starts_with ~prefix:"-" s))
 
-(* parser for flag chains -abcd"value" *)
+(* Allows --flag [value], capturing the (flag, value) pair *)
+let long_value_flag_token (flags : string list) : flag parser =
+  map (fun x -> OptionFlag x) (both (long_flag_token flags) not_flag_token)
+
+(* Allows --flag *)
+let long_simple_flag_token (flags : string list) : flag parser =
+  map (fun x -> SimpleFlag x) (long_flag_token flags)
+
+(* Allows -f [value], capturing the (flag, value) pair. Note, we preparse to split chains of single chars *)
+let short_value_flag_token (flags : char list) : flag parser =
+  map (fun x -> OptionFlag x) (both (short_flag_token flags) not_flag_token)
+
+(* Allows -f. Note, we preparse to split chain of single chars*)
+let short_simple_flag_token (flags : char list) : flag parser =
+  map (fun x -> SimpleFlag x) (short_flag_token flags)
+
+(* Allows -f, -g [value], --flag, --glag [value] *)
+let any_flag_token (char_flags : char list) (char_arg_flags : char list)
+    (long_flags : string list) (long_arg_flags : string list) : flag parser =
+  any_of
+    [
+      short_simple_flag_token char_flags;
+      short_value_flag_token char_arg_flags;
+      long_simple_flag_token long_flags;
+      long_value_flag_token long_arg_flags;
+    ]
+
+(* [flags?] <command> [flags?] <file?> *)
+let parser (char_flags : char list) (char_arg_flags : char list)
+    (long_flags : string list) (long_arg_flags : string list) : arguments parser
+    =
+  let flag_parser =
+    any_flag_token char_flags char_arg_flags long_flags long_arg_flags
+  in
+  (* we first parse the [flags?] <command> [flags?] thing *)
+  let first_parser =
+    both
+      (both (zero_or_more flag_parser) not_flag_token)
+      (zero_or_more flag_parser)
+  in
+  (* flatten it *)
+  let flattener =
+   fun ((flags_before_command, command), flags_after_command) ->
+    let all_flags = flags_before_command @ flags_after_command in
+    (all_flags, command)
+  in
+  let flattened = map flattener first_parser in
+  (* The entire parser including the optional file *)
+  let parser = both flattened (optional not_flag_token) in
+  (* Finally, we make it read the neat arguments record *)
+  let recorder = fun ((flags, command), file) -> { flags; command; file } in
+  map recorder parser
+
+(* Preprocessor only, a flag of type -abdcdewathever, everything else is unprocessed *)
+let is_preprocessor_flag_token (s : string) : bool =
+  String.starts_with ~prefix:"-" s && not (String.starts_with ~prefix:"--" s)
 
 let parse_flag_chain (single_flags : char list) (arg_flags : char list)
     (s : string) : flag list option =
@@ -112,50 +170,40 @@ let parse_flag_chain (single_flags : char list) (arg_flags : char list)
   | [] -> None
   | lst -> Some (List.rev lst)
 
-(* Allows -[chain of single character flags][argument flag?][value associated with argument flag?] *)
-let flag_chain_token (single_flags : char list) (arg_flags : char list) :
-    flag list parser =
-  chain (parse_flag_chain single_flags arg_flags) flag_token
+let replace_flag_token (char_arg_flags : char list) = function
+  | s when is_preprocessor_flag_token s ->
+      let rec parse_chars list = function
+        | [] -> list
+        | s :: xs ->
+            let s_str = String.make 1 s in
+            if List.mem s char_arg_flags then
+              let xs_str = xs |> List.to_seq |> String.of_seq in
+              xs_str :: ("-" ^ s_str) :: list
+            else parse_chars (("-" ^ s_str) :: list) xs
+      in
+      let chars =
+        String.sub s 1 (String.length s - 1) |> String.to_seq |> List.of_seq
+      in
+      List.rev (parse_chars [] chars)
+  | s -> [ s ]
 
-(* Allows --flag [value], capturing the (flag, value) pair *)
-let long_value_flag_token (flags : string list) : flag parser =
-  map (fun x -> OptionFlag x) (both (long_flag_token flags) not_flag_token)
+(* Preprocess a string, splitting -abcdwathever -> -a -b -c -d wathever *)
+let preprocess (char_arg_flags : char list) (args : string list) : string list =
+  List.flatten (List.map (replace_flag_token char_arg_flags) args)
 
-(* Allows --flag *)
-let long_simple_flag_token (flags : string list) : flag parser =
-  map (fun x -> SimpleFlag x) (long_flag_token flags)
-
-let any_flag_token (char_flags : char list) (char_arg_flags : char list)
-    (long_flags : string list) (long_arg_flags : string list) : flag list parser
-    =
-  either
-    (either
-       (flag_chain_token char_flags char_arg_flags)
-       (single_to_list (long_simple_flag_token long_flags)))
-    (single_to_list (long_value_flag_token long_arg_flags))
-
-(* [flags?] <command> [flags?] <file?> *)
-let parser (char_flags : char list) (char_arg_flags : char list)
-    (long_flags : string list) (long_arg_flags : string list) : arguments parser
-    =
-  let flag_parser =
-    any_flag_token char_flags char_arg_flags long_flags long_arg_flags
-  in
-  (* we first parse the [flags?] <command> [flags?] thing *)
-  let first_parser =
-    both
-      (both (zero_or_more flag_parser) not_flag_token)
-      (zero_or_more flag_parser)
-  in
-  (* flatten it *)
-  let flattener =
-   fun ((flags_before_command, command), flags_after_command) ->
-    let all_flags = List.flatten (flags_before_command @ flags_after_command) in
-    (all_flags, command)
-  in
-  let flattened = map flattener first_parser in
-  (* The entire parser including the optional file *)
-  let parser = both flattened (optional not_flag_token) in
-  (* Finally, we make it read the neat arguments record *)
-  let recorder = fun ((flags, command), file) -> { flags; command; file } in
-  map recorder parser
+(* Particular implementation *)
+let parse (char_flags : char list) (char_arg_flags : char list)
+    (long_flags : string list) (long_arg_flags : string list) =
+  let parser = parser char_flags char_arg_flags long_flags long_arg_flags in
+  let raw_args = List.tl (Sys.argv |> Array.to_list) in
+  let args = preprocess char_arg_flags raw_args in
+  let parsed = parser args in
+  match parsed with
+  | Some (args, []) -> args
+  | Some (args, leftover) ->
+      let leftover_str = String.concat " " leftover in
+      Printf.eprintf "Unexpected arguments: %s\n" leftover_str;
+      exit 1
+  | None ->
+      Printf.eprintf "Unable to parse arguments";
+      exit 1
