@@ -177,8 +177,11 @@ let replace_flag_token (char_arg_flags : char list) = function
         | s :: xs ->
             let s_str = String.make 1 s in
             if List.mem s char_arg_flags then
-              let xs_str = xs |> List.to_seq |> String.of_seq in
-              xs_str :: ("-" ^ s_str) :: list
+              if List.length xs > 0 then
+                let xs_str = xs |> List.to_seq |> String.of_seq in
+                xs_str :: ("-" ^ s_str) :: list
+              else
+                ("-" ^ s_str) :: list
             else parse_chars (("-" ^ s_str) :: list) xs
       in
       let chars =
