@@ -9,11 +9,11 @@ type 'a parser = string list -> ('a * string list) option
 
 let checked_token (f : string -> bool) : string parser = function
   | [] -> None
-  | x :: xs when f x == true -> Some (x, xs)
+  | x :: xs when f x = true -> Some (x, xs)
   | x :: xs -> None
 
 let matching (name : string) : string parser =
-  checked_token (fun x -> x == name)
+  checked_token (fun x -> x = name)
 
 let optional (a : 'a parser) : 'a option parser =
  fun x ->
@@ -104,7 +104,7 @@ type arguments = { flags : flag list; command : string; file : string option }
 (* A token of the type -x *)
 let short_flag_token (flags : char list) : string parser =
   checked_token (fun s ->
-      if String.starts_with ~prefix:"-" s && String.length s == 2 then
+      if String.starts_with ~prefix:"-" s && String.length s = 2 then
         let flag = s.[1] in
         List.mem flag flags
       else false)
