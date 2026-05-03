@@ -1,8 +1,6 @@
 (* Copyright (C) 2026 tatjam
    SPDX-License-Identifier: GPL-3.0-or-later *)
 
-type range = float * float [@@deriving show]
-
 (* Simple parser-combinator types and helpers *)
 
 type 'a parser = string list -> ('a * string list) option
@@ -10,10 +8,9 @@ type 'a parser = string list -> ('a * string list) option
 let checked_token (f : string -> bool) : string parser = function
   | [] -> None
   | x :: xs when f x = true -> Some (x, xs)
-  | x :: xs -> None
+  | _ :: _ -> None
 
-let matching (name : string) : string parser =
-  checked_token (fun x -> x = name)
+let matching (name : string) : string parser = checked_token (fun x -> x = name)
 
 let optional (a : 'a parser) : 'a option parser =
  fun x ->
@@ -63,11 +60,7 @@ let map (f : 'a -> 'b) (a : 'a parser) : 'b parser =
 
 (* Argument types *)
 
-type option_flag = string * string [@@deriving show]
-
-type simple_flag = string [@@deriving show]
-
-type flag = SimpleFlag of simple_flag | OptionFlag of option_flag
+type flag = SimpleFlag of string| OptionFlag of string * string
 [@@deriving show]
 
 (* Returns true if flag is set (present), false otherwise *)
@@ -178,46 +171,28 @@ let parser (char_flags : char list) (char_arg_flags : char list)
 let is_preprocessor_flag_token (s : string) : bool =
   String.starts_with ~prefix:"-" s && not (String.starts_with ~prefix:"--" s)
 
-let parse_flag_chain (single_flags : char list) (arg_flags : char list)
-    (s : string) : flag list option =
-  let rec parse_chars list = function
-    | [] -> list
-    | s :: xs ->
-        let s_str = String.make 1 s in
-        if List.mem s arg_flags then
-          let xs_str = xs |> List.to_seq |> String.of_seq in
-          OptionFlag (s_str, xs_str) :: list
-        else if List.mem s single_flags then
-          parse_chars (SimpleFlag s_str :: list) xs
-        else []
-  in
-  let chars = s |> String.to_seq |> List.of_seq in
-  match parse_chars [] chars with
-  | [] -> None
-  | lst -> Some (List.rev lst)
-
-let replace_flag_token (char_arg_flags : char list) = function
-  | s when is_preprocessor_flag_token s ->
-      let rec parse_chars list = function
-        | [] -> list
-        | s :: xs ->
-            let s_str = String.make 1 s in
-            if List.mem s char_arg_flags then
-              if List.length xs > 0 then
-                let xs_str = xs |> List.to_seq |> String.of_seq in
-                xs_str :: ("-" ^ s_str) :: list
-              else ("-" ^ s_str) :: list
-            else parse_chars (("-" ^ s_str) :: list) xs
-      in
-      let chars =
-        String.sub s 1 (String.length s - 1) |> String.to_seq |> List.of_seq
-      in
-      List.rev (parse_chars [] chars)
-  | s -> [ s ]
-
 (* Preprocess a string, splitting -abcdwathever -> -a -b -c -d wathever *)
 let preprocess (char_arg_flags : char list) (args : string list) : string list =
-  List.flatten (List.map (replace_flag_token char_arg_flags) args)
+  let replace_flag_token = function
+    | s when is_preprocessor_flag_token s ->
+        let rec parse_chars list = function
+          | [] -> list
+          | s :: xs ->
+              let s_str = String.make 1 s in
+              if List.mem s char_arg_flags then
+                if List.length xs > 0 then
+                  let xs_str = xs |> List.to_seq |> String.of_seq in
+                  xs_str :: ("-" ^ s_str) :: list
+                else ("-" ^ s_str) :: list
+              else parse_chars (("-" ^ s_str) :: list) xs
+        in
+        let chars =
+          String.sub s 1 (String.length s - 1) |> String.to_seq |> List.of_seq
+        in
+        List.rev (parse_chars [] chars)
+    | s -> [ s ]
+  in
+  List.flatten (List.map replace_flag_token args)
 
 (* Particular implementation *)
 let parse (char_flags : char list) (char_arg_flags : char list)
